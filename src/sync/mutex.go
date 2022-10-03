@@ -30,7 +30,7 @@ func fatal(string)
 // for any n < m.
 // A successful call to TryLock is equivalent to a call to Lock.
 // A failed call to TryLock does not establish any “synchronizes before”
-// relation at all.
+// relation at all.  1001
 type Mutex struct {
 	state int32
 	sema  uint32
@@ -79,7 +79,7 @@ const (
 // If the lock is already in use, the calling goroutine
 // blocks until the mutex is available.
 func (m *Mutex) Lock() {
-	// Fast path: grab unlocked mutex.
+	// Fast path: grab unlocked mutex. 0000
 	if atomic.CompareAndSwapInt32(&m.state, 0, mutexLocked) {
 		if race.Enabled {
 			race.Acquire(unsafe.Pointer(m))
@@ -116,31 +116,36 @@ func (m *Mutex) TryLock() bool {
 
 func (m *Mutex) lockSlow() {
 	var waitStartTime int64
-	starving := false
-	awoke := false
-	iter := 0
+	starving := false // 当前goroutine 是否为饥饿状态
+	awoke := false    // 是否为唤醒状态
+	iter := 0         // 在for循环里,自旋的次数
 	old := m.state
 	for {
 		// Don't spin in starvation mode, ownership is handed off to waiters
 		// so we won't be able to acquire the mutex anyway.
+		// old 011 & 101 = 001  在锁的状态 且 不在饥饿模式下，还得可以自旋
 		if old&(mutexLocked|mutexStarving) == mutexLocked && runtime_canSpin(iter) {
 			// Active spinning makes sense.
 			// Try to set mutexWoken flag to inform Unlock
 			// to not wake other blocked goroutines.
+			// 没有被唤醒， 等待数量(右移) != 0   为啥不用 >0 会-?   设置mutexWoken标记，通知解锁时，不要唤醒其他被阻塞的协程
 			if !awoke && old&mutexWoken == 0 && old>>mutexWaiterShift != 0 &&
 				atomic.CompareAndSwapInt32(&m.state, old, old|mutexWoken) {
 				awoke = true
 			}
 			runtime_doSpin()
 			iter++
-			old = m.state
+			old = m.state // 再次获取锁的最新状态，之后会检查是否锁被释放了
 			continue
 		}
 		new := old
 		// Don't try to acquire starving mutex, new arriving goroutines must queue.
+		// 不在饥饿模式下获取互斥锁，新来拿锁的协程必须进入队列排队。
+		// 不是饥饿模式 则锁上 , 也就是说不能在饥饿模式下上锁。
 		if old&mutexStarving == 0 {
 			new |= mutexLocked
 		}
+		// 如果是锁的状态 或者 饥饿模式 则人数+1
 		if old&(mutexLocked|mutexStarving) != 0 {
 			new += 1 << mutexWaiterShift
 		}
@@ -148,8 +153,9 @@ func (m *Mutex) lockSlow() {
 		// But if the mutex is currently unlocked, don't do the switch.
 		// Unlock expects that starving mutex has waiters, which will not
 		// be true in this case.
+		// 已经是加锁状态
 		if starving && old&mutexLocked != 0 {
-			new |= mutexStarving
+			new |= mutexStarving // 设置为饥饿模式
 		}
 		if awoke {
 			// The goroutine has been woken from sleep,
@@ -157,19 +163,23 @@ func (m *Mutex) lockSlow() {
 			if new&mutexWoken == 0 {
 				throw("sync: inconsistent mutex state")
 			}
-			new &^= mutexWoken
+			new &^= mutexWoken // 新状态清除唤醒标记
 		}
+		// ----以上都在计算new的状态
 		if atomic.CompareAndSwapInt32(&m.state, old, new) {
 			if old&(mutexLocked|mutexStarving) == 0 {
 				break // locked the mutex with CAS
 			}
 			// If we were already waiting before, queue at the front of the queue.
-			queueLifo := waitStartTime != 0
+			queueLifo := waitStartTime != 0 // waitStartTime不为0代表 已经是在等待的。
 			if waitStartTime == 0 {
 				waitStartTime = runtime_nanotime()
 			}
+
+			// queueLifo 为真的时候，当前goroutine会被放到队头，
+			// 也就是说被唤醒却没抢到锁的goroutine放到最前面
 			runtime_SemacquireMutex(&m.sema, queueLifo, 1)
-			starving = starving || runtime_nanotime()-waitStartTime > starvationThresholdNs
+			starving = starving || runtime_nanotime()-waitStartTime > starvationThresholdNs // 超过1ms，进入饥饿状态的等待时间
 			old = m.state
 			if old&mutexStarving != 0 {
 				// If this goroutine was woken and mutex is in starvation mode,
@@ -237,10 +247,12 @@ func (m *Mutex) unlockSlow(new int32) {
 			// goroutine to the next waiter. We are not part of this chain,
 			// since we did not observe mutexStarving when we unlocked the mutex above.
 			// So get off the way.
+			// 没有等待的协程 || 还有锁，饥饿状态，唤醒状态 ???
 			if old>>mutexWaiterShift == 0 || old&(mutexLocked|mutexWoken|mutexStarving) != 0 {
 				return
 			}
 			// Grab the right to wake someone.
+			// 如果有等待的协程，需要将等待的协程数量 - 1 ,并标记mutexWoken唤醒状态。并通过runtime_Semrelease 唤醒等待者移交锁的
 			new = (old - 1<<mutexWaiterShift) | mutexWoken
 			if atomic.CompareAndSwapInt32(&m.state, old, new) {
 				runtime_Semrelease(&m.sema, false, 1)

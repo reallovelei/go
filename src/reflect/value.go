@@ -2679,9 +2679,9 @@ type StringHeader struct {
 // it references will not be garbage collected, so programs must keep
 // a separate, correctly typed pointer to the underlying data.
 type SliceHeader struct {
-	Data uintptr
-	Len  int
-	Cap  int
+	Data uintptr // 切片数据的指针
+	Len  int     // 切片已用的数量
+	Cap  int     // 切片的容量，也就是 第一个字段Data的大小。
 }
 
 func typesMustMatch(what string, t1, t2 Type) {

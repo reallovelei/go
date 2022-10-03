@@ -13,7 +13,7 @@ import (
 
 // This implementation depends on OS-specific implementations of
 //
-//	func semacreate(mp *m)
+//	func  (mp *m)
 //		Create a semaphore for mp, if it does not already have one.
 //
 //	func semasleep(ns int64) int32

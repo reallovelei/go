@@ -40,7 +40,7 @@ import (
 type semaRoot struct {
 	lock  mutex
 	treap *sudog // root of balanced tree of unique waiters.
-	nwait uint32 // Number of waiters. Read w/o the lock.
+	nwait uint32 // Number of waiters. Read w/o the lock.  等待者(g ?)的数量
 }
 
 var semtable semTable
@@ -102,24 +102,25 @@ func semacquire(addr *uint32) {
 }
 
 func semacquire1(addr *uint32, lifo bool, profile semaProfileFlags, skipframes int) {
+	// 获取当前的 g，并判断是否跟 m 上实际运行的 g 一致。
 	gp := getg()
 	if gp != gp.m.curg {
 		throw("semacquire not on the G stack")
 	}
 
-	// Easy case.
+	// Easy case.  检查信号量大于0 且 CAS -1 成功则直接返回
 	if cansemacquire(addr) {
 		return
 	}
 
 	// Harder case:
-	//	increment waiter count
-	//	try cansemacquire one more time, return if succeeded
-	//	enqueue itself as a waiter
+	//	increment waiter count  增加等待者计数
+	//	try cansemacquire one more time, return if succeeded  再次尝试 cansemacquire 如果成功则返回
+	//	enqueue itself as a waiter   将自己作为等待者入队
 	//	sleep
 	//	(waiter descriptor is dequeued by signaler)
-	s := acquireSudog()
-	root := semtable.rootFor(addr)
+	s := acquireSudog()            //获取一个 sudog 对象
+	root := semtable.rootFor(addr) //根据信号量地址 hash 到 semtable 中
 	t0 := int64(0)
 	s.releasetime = 0
 	s.acquiretime = 0
@@ -135,17 +136,17 @@ func semacquire1(addr *uint32, lifo bool, profile semaProfileFlags, skipframes i
 		s.acquiretime = t0
 	}
 	for {
-		lockWithRank(&root.lock, lockRankRoot)
-		// Add ourselves to nwait to disable "easy case" in semrelease.
+		lockWithRank(&root.lock, lockRankRoot) // 上锁
+		// Add ourselves to nwait to disable "easy case" in semrelease.  semaRoot的nwait +1
 		atomic.Xadd(&root.nwait, 1)
-		// Check cansemacquire to avoid missed wakeup.
+		// Check cansemacquire to avoid missed wakeup.  再次检查 避免错过唤醒。
 		if cansemacquire(addr) {
 			atomic.Xadd(&root.nwait, -1)
 			unlock(&root.lock)
 			break
 		}
 		// Any semrelease after the cansemacquire knows we're waiting
-		// (we set nwait above), so go to sleep.
+		// (we set nwait above), so go to sleep. 把sudog 加到 semaroot的 treap结构上。
 		root.queue(addr, s, lifo)
 		goparkunlock(&root.lock, waitReasonSemacquire, traceEvGoBlockSync, 4+skipframes)
 		if s.ticket != 0 || cansemacquire(addr) {

@@ -18,7 +18,7 @@ func getLockRank(l *mutex) lockRank {
 	return 0
 }
 
-func lockWithRank(l *mutex, rank lockRank) {
+func lockWithRank(l *mutex, rank lockRank) { // 请教一下 这个rank 传进来是干嘛用的？
 	lock2(l)
 }
 

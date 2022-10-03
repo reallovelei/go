@@ -1113,7 +1113,7 @@ func newstack() {
 	if stackDebug >= 1 {
 		print("stack grow done\n")
 	}
-	casgstatus(gp, _Gcopystack, _Grunning)
+	casgstatus(gp, _Gcopystack, _Grunning) // 把g改成 running状态   (上面刚改了 copystack ???)
 	gogo(&gp.sched)
 }
 
